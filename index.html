@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ケイデンス メトロノーム</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #121212;
+            color: #ffffff;
+        }
+        .container {
+            text-align: center;
+            background-color: #1e1e1e;
+            padding: 2rem;
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            width: 80%;
+            max-width: 320px;
+        }
+        h1 {
+            font-size: 1.2rem;
+            margin-bottom: 1.5rem;
+            color: #aaa;
+        }
+        .input-group {
+            margin-bottom: 2rem;
+        }
+        label {
+            display: block;
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+            color: #888;
+        }
+        input[type="number"] {
+            width: 120px;
+            padding: 10px;
+            font-size: 2rem;
+            text-align: center;
+            border: 2px solid #333;
+            border-radius: 8px;
+            background-color: #2a2a2a;
+            color: #fff;
+        }
+        button {
+            width: 100%;
+            padding: 15px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .start-btn {
+            background-color: #007aff;
+            color: white;
+        }
+        .stop-btn {
+            background-color: #ff3b30;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Cadence Metronome</h1>
+    
+    <div class="input-group">
+        <label for="bpm">BPM (ケイデンス)</label>
+        <input type="number" id="bpm" value="90" min="30" max="250">
+    </div>
+
+    <button id="toggleBtn" class="start-btn">スタート</button>
+</div>
+
+<script>
+    let audioCtx = null;
+    let timerId = null;
+    let isRunning = false;
+
+    const bpmInput = document.getElementById('bpm');
+    const toggleBtn = document.getElementById('toggleBtn');
+
+    // ピッという電子音（ビープ音）を生成する関数
+    function playBeep() {
+        if (!audioCtx) return;
+
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+
+        // 周波数設定（880Hz = A5音、ピッチが高めの電子音）
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+
+        // 音量のエンベロープ（短く歯切れの良い音にする）
+        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.05);
+
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.05);
+    }
+
+    function startMetronome() {
+        // Web Audio APIの初期化（ユーザー操作をトリガーにする必要がある）
+        if (!audioCtx) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume();
+        }
+
+        const bpm = parseInt(bpmInput.value, 10) || 90;
+        const intervalMs = (60 / bpm) * 1000;
+
+        playBeep(); // 開始時に一度鳴らす
+        timerId = setInterval(playBeep, intervalMs);
+
+        isRunning = true;
+        toggleBtn.textContent = '停止';
+        toggleBtn.className = 'stop-btn';
+    }
+
+    function stopMetronome() {
+        clearInterval(timerId);
+        timerId = null;
+        isRunning = false;
+        toggleBtn.textContent = 'スタート';
+        toggleBtn.className = 'start-btn';
+    }
+
+    toggleBtn.addEventListener('click', () => {
+        if (isRunning) {
+            stopMetronome();
+        } else {
+            startMetronome();
+        }
+    });
+</script>
+
+</body>
+</html>
