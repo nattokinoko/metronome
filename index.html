@@ -11,7 +11,7 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            height: 100vh;
+            min-height: 100vh;
             margin: 0;
             background-color: #121212;
             color: #ffffff;
@@ -22,8 +22,8 @@
             padding: 2rem;
             border-radius: 16px;
             box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-            width: 80%;
-            max-width: 320px;
+            width: 85%;
+            max-width: 340px;
         }
         h1 {
             font-size: 1.2rem;
@@ -31,23 +31,47 @@
             color: #aaa;
         }
         .input-group {
-            margin-bottom: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.2rem;
+            margin-bottom: 1.8rem;
+        }
+        .input-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
         label {
-            display: block;
             font-size: 0.9rem;
-            margin-bottom: 0.5rem;
-            color: #888;
+            color: #bbb;
+            text-align: left;
         }
         input[type="number"] {
-            width: 120px;
-            padding: 10px;
-            font-size: 2rem;
+            width: 90px;
+            padding: 8px;
+            font-size: 1.4rem;
             text-align: center;
             border: 2px solid #333;
             border-radius: 8px;
             background-color: #2a2a2a;
             color: #fff;
+        }
+        .current-display {
+            background-color: #2a2a2a;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            border: 1px solid #333;
+        }
+        .current-label {
+            font-size: 0.8rem;
+            color: #888;
+            margin-bottom: 0.2rem;
+        }
+        .current-value {
+            font-size: 2.2rem;
+            font-weight: bold;
+            color: #34c759;
         }
         button {
             width: 100%;
@@ -75,8 +99,23 @@
     <h1>Cadence Metronome</h1>
     
     <div class="input-group">
-        <label for="bpm">BPM (ケイデンス)</label>
-        <input type="number" id="bpm" value="90" min="30" max="250">
+        <div class="input-item">
+            <label for="startCadence">スタート (RPM)</label>
+            <input type="number" id="startCadence" value="70" min="30" max="250">
+        </div>
+        <div class="input-item">
+            <label for="targetCadence">目標 (RPM)</label>
+            <input type="number" id="targetCadence" value="90" min="30" max="250">
+        </div>
+        <div class="input-item">
+            <label for="transitionTime">遷移時間 (分)</label>
+            <input type="number" id="transitionTime" value="5" min="0" max="120" step="0.5">
+        </div>
+    </div>
+
+    <div class="current-display">
+        <div class="current-label">現在のケイデンス</div>
+        <div class="current-value" id="currentCadenceDisplay">--</div>
     </div>
 
     <button id="toggleBtn" class="start-btn">スタート</button>
@@ -84,36 +123,106 @@
 
 <script>
     let audioCtx = null;
-    let timerId = null;
+    let clickBuffer = null; // 事前生成PCMバッファ
     let isRunning = false;
+    let timerId = null;
 
-    const bpmInput = document.getElementById('bpm');
+    let startCadence = 70;
+    let targetCadence = 90;
+    let transitionDurationSec = 300;
+    let startTime = 0;
+    let nextNoteTime = 0;
+
+    const startCadenceInput = document.getElementById('startCadence');
+    const targetCadenceInput = document.getElementById('targetCadence');
+    const transitionTimeInput = document.getElementById('transitionTime');
     const toggleBtn = document.getElementById('toggleBtn');
+    const currentCadenceDisplay = document.getElementById('currentCadenceDisplay');
 
-    // ピッという電子音（ビープ音）を生成する関数
-    function playBeep() {
-        if (!audioCtx) return;
+    /**
+     * 100%決定論的なビープ音PCMバッファを作成する関数
+     * アタック・ディケイが固定されたPCMデータとなるため、
+     * リアルタイム音量計算（Ramp）による128サンプル境界エイリアシングが一切発生しません。
+     */
+    function createClickBuffer(context) {
+        const sampleRate = context.sampleRate;
+        const duration = 0.05; // 50ms
+        const numSamples = Math.floor(sampleRate * duration);
+        const buffer = context.createBuffer(1, numSamples, sampleRate);
+        const data = buffer.getChannelData(0);
+        
+        const freq = 880; // 880Hz (A5音)
+        const attackSamples = Math.floor(sampleRate * 0.003); // 3ms アタック
 
-        const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
+        for (let i = 0; i < numSamples; i++) {
+            const t = i / sampleRate;
+            let envelope = 1.0;
 
-        // 周波数設定（880Hz = A5音、ピッチが高めの電子音）
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+            if (i < attackSamples) {
+                // 滑らかな直線アタック
+                envelope = i / attackSamples;
+            } else {
+                // 指数関数的ディケイ
+                envelope = Math.exp(- (t - 0.003) * 60);
+            }
 
-        // 音量のエンベロープ（短く歯切れの良い音にする）
-        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.05);
+            // 正弦波 × エンベロープ（振幅 0.4）
+            data[i] = Math.sin(2 * Math.PI * freq * t) * envelope * 0.4;
+        }
 
-        osc.connect(gain);
-        gain.connect(audioCtx.destination);
-
-        osc.start();
-        osc.stop(audioCtx.currentTime + 0.05);
+        return buffer;
     }
 
+    function playBeep(time) {
+        if (!audioCtx || !clickBuffer) return;
+
+        // クリップを発生させない安全な再生時刻を設定
+        const now = audioCtx.currentTime;
+        const playTime = Math.max(time, now);
+
+        // Pre-rendered AudioBufferSourceNodeを生成して即座にスケジューリング
+        const source = audioCtx.createBufferSource();
+        source.buffer = clickBuffer;
+        source.connect(audioCtx.destination);
+        source.start(playTime);
+    }
+
+    function getCurrentCadence(elapsedSec) {
+        if (transitionDurationSec <= 0 || elapsedSec >= transitionDurationSec) {
+            return targetCadence;
+        }
+        const progress = elapsedSec / transitionDurationSec;
+        return startCadence + (targetCadence - startCadence) * progress;
+    }
+
+    function scheduleNextClick() {
+        if (!isRunning) return;
+
+        const scheduleAheadTime = 0.2; // 200ms先まで予約
+        const now = audioCtx.currentTime;
+
+        if (nextNoteTime < now) {
+            nextNoteTime = now;
+        }
+
+        while (nextNoteTime < now + scheduleAheadTime) {
+            playBeep(nextNoteTime);
+
+            const elapsedSec = nextNoteTime - startTime;
+            const currentCadence = getCurrentCadence(elapsedSec);
+            
+            // UI表示更新
+            currentCadenceDisplay.textContent = Math.round(currentCadence);
+
+            // 次のクリック間隔（秒）
+            const intervalSec = 60 / currentCadence;
+            nextNoteTime += intervalSec;
+        }
+
+        timerId = setTimeout(scheduleNextClick, 30);
+        }
+
     function startMetronome() {
-        // Web Audio APIの初期化（ユーザー操作をトリガーにする必要がある）
         if (!audioCtx) {
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         }
@@ -121,23 +230,36 @@
             audioCtx.resume();
         }
 
-        const bpm = parseInt(bpmInput.value, 10) || 90;
-        const intervalMs = (60 / bpm) * 1000;
+        // バッファが未作成の場合は初回に一括作成
+        if (!clickBuffer) {
+            clickBuffer = createClickBuffer(audioCtx);
+        }
 
-        playBeep(); // 開始時に一度鳴らす
-        timerId = setInterval(playBeep, intervalMs);
+        startCadence = parseFloat(startCadenceInput.value) || 70;
+        targetCadence = parseFloat(targetCadenceInput.value) || 90;
+        const transitionMin = parseFloat(transitionTimeInput.value) || 0;
+        transitionDurationSec = transitionMin * 60;
 
+        const now = audioCtx.currentTime;
+        startTime = now;
+        nextNoteTime = now + 0.01;
         isRunning = true;
+
         toggleBtn.textContent = '停止';
         toggleBtn.className = 'stop-btn';
+
+        scheduleNextClick();
     }
 
     function stopMetronome() {
-        clearInterval(timerId);
-        timerId = null;
         isRunning = false;
+        if (timerId) {
+            clearTimeout(timerId);
+            timerId = null;
+        }
         toggleBtn.textContent = 'スタート';
         toggleBtn.className = 'start-btn';
+        currentCadenceDisplay.textContent = '--';
     }
 
     toggleBtn.addEventListener('click', () => {
